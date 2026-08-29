@@ -1,6 +1,24 @@
 # stt-terminject
 
-Push-to-Talk Speech-to-Text daemon for Linux terminals. Transcribes voice input into any active tmux session or desktop clipboard.
+> **Push-to-Talk Speech-to-Text daemon for Linux terminals.** Hold a global hotkey, speak, and your words land directly in your terminal — via tmux or clipboard.
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.77+-orange.svg)](https://www.rust-lang.org/)
+[![Platform: Linux](https://img.shields.io/badge/platform-Linux-lightgrey.svg)]()
+
+Local, offline, **100% on-device** speech-to-text built on [whisper.cpp](https://github.com/ggerganov/whisper.cpp). No cloud, no accounts, no audio leaves your machine. Perfect for dictating into **OpenCode, Claude Code, shells** or any tmux session — hands stay on the keyboard.
+
+**Highlights**
+
+- 🎙️ **Global hotkey push-to-talk** — press-and-hold to record, release to dict
+- 🌐 **Multilingual** — auto-detect or force a language (German, English, …)
+- 🔌 **tmux + clipboard injection** — direct `send-keys` or clipboard + `Ctrl+V`
+- 📱 **Remote input** — REST API so phone browsers / Android apps can dictate
+- 🧩 **Vendored & dependency-light** — build from source or use the pre-built `delivery/`
+
+```bash
+stt-terminject &        # hold Ctrl+Alt+Space, speak, release
+```
 
 ## Features
 
