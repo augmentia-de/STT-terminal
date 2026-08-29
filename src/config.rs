@@ -97,6 +97,12 @@ pub struct Config {
     #[serde(default = "default_model_file")]
     pub model_file: String,
 
+    /// Spoken language for transcription. `null`/`"auto"` = Whisper auto-detects
+    /// (recommended for the multilingual model). `"de"`, `"en"`, `"fr"`, ... force
+    /// a specific ISO-639-1 language.
+    #[serde(default)]
+    pub language: Option<String>,
+
     /// If set, inject transcript into this tmux session using send-keys
     #[serde(default)]
     pub tmux_session: Option<String>,
@@ -136,6 +142,7 @@ impl Default for Config {
         Self {
             model_dir: default_model_dir(),
             model_file: default_model_file(),
+            language: None,
             tmux_session: None,
             use_clipboard: true,
             auto_enter: false,

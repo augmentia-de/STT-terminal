@@ -114,6 +114,7 @@ pub struct Dictation {
     verified_marker_path: PathBuf,
     ready_marker_path: PathBuf,
     spec: ModelSpec,
+    language: Option<String>,
     commands: Sender<Command>,
     recording: Arc<Mutex<bool>>,
     // Live handle onto the in-flight recording's sample buffer (set by the capture worker
@@ -159,12 +160,27 @@ impl Dictation {
             ready_marker_path: model_path.with_extension("bin.ready"),
             model_path,
             spec,
+            language: None,
             commands,
             recording,
             live,
             download_in_progress: AtomicBool::new(false),
             cancel_download: AtomicBool::new(false),
         }
+    }
+
+    /// Set the spoken language for transcription (builder-style).
+    ///
+    /// `None` or `"auto"` → Whisper auto-detects the language from the audio
+    /// (recommended for the multilingual model). `Some("de")`/`Some("en")`/...
+    /// force that language (ISO-639-1 codes).
+    pub fn with_language(mut self, language: Option<&str>) -> Self {
+        self.language = match language {
+            Some(l) if l.eq_ignore_ascii_case("auto") || l.is_empty() => None,
+            Some(l) => Some(l.to_lowercase()),
+            None => None,
+        };
+        self
     }
 
     pub fn status(&self) -> DictationStatus {
@@ -360,7 +376,11 @@ impl Dictation {
         if samples.len() < (sample_rate as usize / 4) {
             return Ok(String::new());
         }
-        transcribe(&self.model_path, &resample_mono(&samples, sample_rate))
+        transcribe_with_language(
+            &self.model_path,
+            &resample_mono(&samples, sample_rate),
+            self.language.as_deref(),
+        )
     }
 
     /// Instantaneous input loudness of the in-flight recording, 0.0..=1.0 — RMS over the
@@ -645,8 +665,25 @@ pub fn resample_mono(input: &[f32], source_rate: u32) -> Vec<f32> {
 /// Transcribes raw mono samples (already at [`WHISPER_SAMPLE_RATE`]) with the
 /// model at `model_path`. Public so hosts can transcribe audio from other
 /// sources than a live dictation session (e.g. uploaded WAV files). English-only
-/// by design of the bundled `base.en` model.
+/// by design of the bundled `base.en` model (see [`transcribe_with_language`]).
 pub fn transcribe(model_path: &Path, samples: &[f32]) -> Result<String, String> {
+    transcribe_with_language(model_path, samples, None)
+}
+
+/// Like [`transcribe`], but lets the caller choose the spoken language.
+///
+/// - `language = None` → let Whisper **auto-detect** the language from the audio
+///   (recommended for the multilingual `MODEL_SMALL` model: reliable German).
+/// - `language = Some("de")` → force German.
+/// - `language = Some("en")` → force English (required for the English-only
+///   `MODEL_BASE_EN` model, which cannot handle other languages).
+///
+/// Language codes follow Whisper's ISO-639-1 style (`de`, `en`, `fr`, ...).
+pub fn transcribe_with_language(
+    model_path: &Path,
+    samples: &[f32],
+    language: Option<&str>,
+) -> Result<String, String> {
     if !model_path.is_file() {
         return Err("The local voice model is not installed yet.".to_owned());
     }
@@ -661,7 +698,9 @@ pub fn transcribe(model_path: &Path, samples: &[f32]) -> Result<String, String> 
         .create_state()
         .map_err(|e| format!("Could not prepare transcription: {e}"))?;
     let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-    params.set_language(Some("en"));
+    // None = auto-detect; Some(code) = force that language.
+    let lang = language.map(|l| l.to_owned());
+    params.set_language(lang.as_deref());
     params.set_translate(false);
     params.set_print_progress(false);
     params.set_print_special(false);

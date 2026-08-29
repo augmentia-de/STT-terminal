@@ -1,6 +1,7 @@
 {
   "model_dir": "~/.cache/ocw-stt/models",
   "model_file": "ggml-small.bin",
+  "language": "auto",
   "tmux_session": null,
   "use_clipboard": true,
   "auto_enter": false,

@@ -44,6 +44,10 @@ struct Cli {
     #[arg(long, global = true)]
     model_file: Option<String>,
 
+    /// Override spoken language for transcription: auto|de|en|... (ISO-639-1)
+    #[arg(long, global = true)]
+    language: Option<String>,
+
     /// Override tmux session name for injection (disables clipboard mode)
     #[arg(long, global = true)]
     tmux_session: Option<String>,
@@ -87,6 +91,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(file) = cli.model_file {
         cfg.model_file = file;
     }
+    if let Some(lang) = cli.language {
+        cfg.language = Some(lang);
+    }
     if let Some(session) = cli.tmux_session {
         cfg.tmux_session = Some(session);
         // If tmux session specified explicitly, disable clipboard unless user asked for it
@@ -115,6 +122,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             "Clipboard + Ctrl+V".to_owned()
         }
+    );
+    info!(
+        "Language: {}",
+        cfg.language
+            .as_deref()
+            .map(|l| if l.eq_ignore_ascii_case("auto") { "auto-detect".to_owned() } else { l.to_owned() })
+            .unwrap_or_else(|| "auto-detect".to_owned())
     );
     info!(
         "HTTP API listening on: {}:{}",

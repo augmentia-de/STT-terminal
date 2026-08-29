@@ -46,6 +46,9 @@ Key options:
 
 - `model_file` — Whisper model file. `ggml-base.en.bin` (English only) or
   `ggml-small.bin` (**multilingual, incl. German**, recommended).
+- `language` — spoken language for transcription:
+  - `null` or `"auto"` → Whisper auto-detects (recommended for multilingual model)
+  - `"de"` → force German · `"en"` → force English · other ISO-639-1 codes
 - `hotkey` — push-to-talk global hotkey, e.g. `{"modifiers":["alt"],"key":"q"}`.
 - `tmux_session` — inject into a tmux session via `send-keys`; leave `null` for
   clipboard + Ctrl+V injection.

@@ -40,13 +40,14 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// Create a new recorder backed by Dictation at the given model directory
-    /// and using the given model file (e.g. `ggml-small.bin` for German).
-    pub fn new(model_dir: &std::path::Path, model_file: &str) -> Self {
+    /// Create a new recorder backed by Dictation at the given model directory,
+    /// using the given model file (e.g. `ggml-small.bin` for German) and an
+    /// optional spoken language (`None`/`"auto"` = auto-detect).
+    pub fn new(model_dir: &std::path::Path, model_file: &str, language: Option<&str>) -> Self {
         let spec = ocw_stt::model_spec_for_file(model_file)
             .unwrap_or(ocw_stt::MODEL_BASE_EN);
         Self {
-            inner: Mutex::new(Dictation::with_spec(model_dir, spec)),
+            inner: Mutex::new(Dictation::with_spec(model_dir, spec).with_language(language)),
             is_recording: AtomicBool::new(false),
         }
     }
@@ -111,8 +112,9 @@ impl AppState {
     pub fn new(config: Config) -> Self {
         let model_dir = expand_tilde(&config.model_dir);
         let model_file = config.model_file.clone();
+        let language = config.language.as_deref();
         Self {
-            recorder: Arc::new(Recorder::new(&model_dir, &model_file)),
+            recorder: Arc::new(Recorder::new(&model_dir, &model_file, language)),
             config: Arc::new(config),
         }
     }
@@ -240,9 +242,10 @@ async fn agent_audio(
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     let model_path = state.recorder.model_path(&state.config.model_dir, &state.config.model_file);
+    let language = state.config.language.as_deref().map(|l| l.to_owned());
 
     let result = tokio::task::spawn_blocking(move || {
-        decode_wav_and_transcribe(&model_path, &body)
+        decode_wav_and_transcribe(&model_path, &body, language.as_deref())
     })
     .await;
 
@@ -285,10 +288,14 @@ async fn agent_audio(
 }
 
 /// Decode raw bytes as WAV format then feed samples through whisper.cpp inference pipeline
-fn decode_wav_and_transcribe(model_path: &std::path::Path, wav_bytes: &[u8]) -> Result<String, String> {
+fn decode_wav_and_transcribe(
+    model_path: &std::path::Path,
+    wav_bytes: &[u8],
+    language: Option<&str>,
+) -> Result<String, String> {
     let (samples, sample_rate) = decode_wav_to_f32(wav_bytes)?;
     let resampled = resample_mono(&samples, sample_rate);
-    ocw_stt::transcribe(model_path, &resampled)
+    ocw_stt::transcribe_with_language(model_path, &resampled, language)
 }
 
 /// Minimal WAV parser extracting PCM data into normalized float range [-1..+1]
