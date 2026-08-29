@@ -78,3 +78,13 @@ Then set `model_file` in `config.json` accordingly and run `./stt.sh restart`.
 - `POST /dictate/stop`
 - `POST /dictate/cancel`
 - `POST /agent/audio` (WAV upload → transcript)
+
+## License
+
+This project is released under the **MIT License** (see `LICENSE` at the repo
+root). The binary statically links and vendors third-party components — including
+**ocw-stt** (MIT), **whisper-rs / whisper-rs-sys** (Unlicense) and **whisper.cpp**
+(MIT) — and uses OpenAI Whisper models (MIT, downloaded separately, not bundled).
+Attribution and full license texts are provided in `LICENSE-THIRD-PARTY.md` at
+the repo root. `delivery/` is distributed as part of this same repository, so no
+separate license copies are needed here.

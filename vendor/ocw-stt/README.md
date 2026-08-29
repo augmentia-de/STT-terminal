@@ -10,7 +10,7 @@ is required to build).
 
 - **Upstream:** `stt` directory of [`andrewyng/openworker`](https://github.com/andrewyng/openworker)
 - **Base version:** tag `v0.2.1` (commit `7fc3ee6`)
-- **License:** MIT
+- **License:** MIT (see [`LICENSE`](LICENSE))
 
 ## Differences vs. upstream v0.2.1
 
