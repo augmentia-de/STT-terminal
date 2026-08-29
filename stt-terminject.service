@@ -1,0 +1,35 @@
+[Unit]
+Description=STT Terminal Injection Daemon (speech-to-text terminal injection)
+After=graphical-session.target
+Wants=graphical-session.target
+
+[Service]
+Type=simple
+# User-Unit: läuft bereits als eingeloggter Nutzer, daher KEIN User= nötig.
+# Zusätzliche HOME-Referenz für die Pfade unten.
+Environment=HOME=%h
+Environment=PATH=/home/%u/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+# DISPLAY/WAYLAND erbt systemd --user automatisch von der grafischen Sitzung
+# (WantedBy=graphical-session.target). Globaler Hotkey + Clipboard/Injection
+# (enigo/X11) brauchen diesen Zugriff.
+
+# Primär aus ~/.cargo/bin (so installiert build.sh), Fallback via PATH
+ExecStart=%h/.cargo/bin/stt-terminject --config %h/.config/stt-terminject/config.json
+Restart=always
+RestartSec=3
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=stt-terminject
+
+# Lightweight Hardening — NUR das, was der Daemon wirklich braucht.
+# Der Daemon braucht X11-Zugriff (Hotkey + Injection) und den Modell-/Config-Pfad.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+# Modell (read) + Config (read) sind unter %h/.cache/ocw-stt und %h/.config/stt-terminject
+ReadOnlyPaths=%h/.cache/ocw-stt/models
+ReadWritePaths=%h/.cache/ocw-stt %h/.config/stt-terminject
+
+[Install]
+WantedBy=graphical-session.target
