@@ -40,6 +40,10 @@ struct Cli {
     #[arg(long, global = true)]
     model_dir: Option<PathBuf>,
 
+    /// Override model file within model_dir (e.g. ggml-small.bin for German)
+    #[arg(long, global = true)]
+    model_file: Option<String>,
+
     /// Override tmux session name for injection (disables clipboard mode)
     #[arg(long, global = true)]
     tmux_session: Option<String>,
@@ -80,6 +84,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(dir) = cli.model_dir {
         cfg.model_dir = config::expand_tilde(&dir);
     }
+    if let Some(file) = cli.model_file {
+        cfg.model_file = file;
+    }
     if let Some(session) = cli.tmux_session {
         cfg.tmux_session = Some(session);
         // If tmux session specified explicitly, disable clipboard unless user asked for it
@@ -115,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Ensure model is installed & verified before proceeding
-    ensure_model(&model_dir)?;
+    ensure_model(&model_dir, &cfg.model_file)?;
 
     // Build shared application state containing recorder + config
     let state = AppState::new(cfg.clone());
@@ -159,12 +166,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Download (if necessary) and verify the Whisper GGML model
-fn ensure_model(model_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let dictation = ocw_stt::Dictation::new(model_dir);
+fn ensure_model(model_dir: &PathBuf, model_file: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let spec = ocw_stt::model_spec_for_file(model_file)
+        .unwrap_or(ocw_stt::MODEL_BASE_EN);
+    let dictation = ocw_stt::Dictation::with_spec(model_dir, spec);
     let status = dictation.status();
 
     if status.model_verified {
-        info!("Voice model already present and verified");
+        info!(
+            "Voice model present and verified: {} ({})",
+            spec.file, spec.label
+        );
+        return Ok(());
+    }
+
+    if status.model_installed {
+        // File is present but not yet verified (e.g. freshly downloaded by the user).
+        // Verify in place instead of re-downloading the whole model.
+        info!("Voice model present but not verified. Verifying {} ...", spec.file);
+        dictation.verify_default_model()?;
+        dictation.mark_test_passed()?;
+        info!("Voice model verified successfully");
         return Ok(());
     }
 
@@ -174,8 +196,9 @@ fn ensure_model(model_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     info!(
-        "Voice model not found locally. Starting download ({:.0} MB)...",
-        ocw_stt::DEFAULT_MODEL_BYTES as f64 / 1_000_000f64
+        "Voice model not found locally. Starting download of {} ({:.0} MB)...",
+        spec.file,
+        spec.bytes as f64 / 1_000_000f64
     );
 
     dictation.install_default_model_with_progress(|progress| {
@@ -191,7 +214,6 @@ fn ensure_model(model_dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     dictation.verify_default_model()?;
     dictation.mark_test_passed()?;
     info!("Voice model installed and verified successfully");
-
     Ok(())
 }
 

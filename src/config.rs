@@ -91,6 +91,12 @@ pub struct Config {
     #[serde(default = "default_model_dir")]
     pub model_dir: PathBuf,
 
+    /// Whisper model file name within `model_dir`.
+    /// `ggml-base.en.bin` (English only, default), `ggml-small.bin` (multilingual
+    /// incl. German), or any other recognized Whisper GGML model file.
+    #[serde(default = "default_model_file")]
+    pub model_file: String,
+
     /// If set, inject transcript into this tmux session using send-keys
     #[serde(default)]
     pub tmux_session: Option<String>,
@@ -116,6 +122,11 @@ fn default_true() -> bool {
     true
 }
 
+/// Default model file: the fast English-only base model.
+pub fn default_model_file() -> String {
+    "ggml-base.en.bin".to_owned()
+}
+
 fn default_port() -> u16 {
     DEFAULT_LISTEN_PORT
 }
@@ -124,6 +135,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             model_dir: default_model_dir(),
+            model_file: default_model_file(),
             tmux_session: None,
             use_clipboard: true,
             auto_enter: false,

@@ -40,10 +40,13 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// Create a new recorder backed by Dictation at the given model directory.
-    pub fn new(model_dir: &std::path::Path) -> Self {
+    /// Create a new recorder backed by Dictation at the given model directory
+    /// and using the given model file (e.g. `ggml-small.bin` for German).
+    pub fn new(model_dir: &std::path::Path, model_file: &str) -> Self {
+        let spec = ocw_stt::model_spec_for_file(model_file)
+            .unwrap_or(ocw_stt::MODEL_BASE_EN);
         Self {
-            inner: Mutex::new(Dictation::new(model_dir)),
+            inner: Mutex::new(Dictation::with_spec(model_dir, spec)),
             is_recording: AtomicBool::new(false),
         }
     }
@@ -90,9 +93,9 @@ impl Recorder {
         ocw_stt::transcribe(model_path, samples)
     }
 
-    /// Resolve model filename from config-provided directory
-    pub fn model_path(&self, model_dir: &std::path::Path) -> PathBuf {
-        model_dir.join(ocw_stt::DEFAULT_MODEL_FILE)
+    /// Resolve model filename from config-provided directory and model file
+    pub fn model_path(&self, model_dir: &std::path::Path, model_file: &str) -> PathBuf {
+        model_dir.join(model_file)
     }
 }
 
@@ -107,8 +110,9 @@ impl AppState {
     /// Construct fresh app state from parsed configuration.
     pub fn new(config: Config) -> Self {
         let model_dir = expand_tilde(&config.model_dir);
+        let model_file = config.model_file.clone();
         Self {
-            recorder: Arc::new(Recorder::new(&model_dir)),
+            recorder: Arc::new(Recorder::new(&model_dir, &model_file)),
             config: Arc::new(config),
         }
     }
@@ -235,7 +239,7 @@ async fn agent_audio(
     State(state): State<AppState>,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
-    let model_path = state.recorder.model_path(&state.config.model_dir);
+    let model_path = state.recorder.model_path(&state.config.model_dir, &state.config.model_file);
 
     let result = tokio::task::spawn_blocking(move || {
         decode_wav_and_transcribe(&model_path, &body)

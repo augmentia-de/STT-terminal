@@ -1,0 +1,13 @@
+{
+  "model_dir": "~/.cache/ocw-stt/models",
+  "model_file": "ggml-small.bin",
+  "tmux_session": null,
+  "use_clipboard": true,
+  "auto_enter": false,
+  "listen_port": 3210,
+  "hotkey": {
+    "modifiers": ["alt"],
+    "key": "q"
+  }
+}
+

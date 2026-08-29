@@ -24,13 +24,57 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-/// A reasonably fast English model for short OpenWorker prompts (~142 MB).
-pub const DEFAULT_MODEL_FILE: &str = "ggml-base.en.bin";
-pub const DEFAULT_MODEL_URL: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin";
-pub const DEFAULT_MODEL_BYTES: u64 = 147_964_211;
-pub const DEFAULT_MODEL_SHA256: &str =
-    "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002";
+/// Descriptor for a bundled Whisper GGML model.
+///
+/// A host selects which model to use. Every model has a local file name, a
+/// download URL, the expected byte size, and a SHA-256 checksum used for
+/// atomic verification (no corrupted/truncated model is ever used).
+#[derive(Debug, Clone, Copy)]
+pub struct ModelSpec {
+    /// Local file name under `model_dir`, e.g. `ggml-base.en.bin`.
+    pub file: &'static str,
+    /// Remote URL the model is downloaded from.
+    pub url: &'static str,
+    /// Expected on-disk size in bytes (checked before hashing).
+    pub bytes: u64,
+    /// Lowercase hex SHA-256 checksum of the model file.
+    pub sha256: &'static str,
+    /// Human-readable model label surfaced in `DictationStatus::model_name`.
+    pub label: &'static str,
+}
+
+/// Fast English-only model (~142 MB) — default and historical default.
+pub const MODEL_BASE_EN: ModelSpec = ModelSpec {
+    file: "ggml-base.en.bin",
+    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin",
+    bytes: 147_964_211,
+    sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+    label: "Whisper Base English (local)",
+};
+
+/// Multilingual small model (~466 MB). Supports 98 languages incl. German —
+/// noticeably better accuracy for non-English dictation than the base model.
+pub const MODEL_SMALL: ModelSpec = ModelSpec {
+    file: "ggml-small.bin",
+    url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+    bytes: 487_601_967,
+    sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+    label: "Whisper Small Multilingual (local)",
+};
+
+/// The model used when no model is explicitly requested (kept for compatibility).
+pub const DEFAULT_MODEL_FILE: &str = MODEL_BASE_EN.file;
+pub const DEFAULT_MODEL_URL: &str = MODEL_BASE_EN.url;
+pub const DEFAULT_MODEL_BYTES: u64 = MODEL_BASE_EN.bytes;
+pub const DEFAULT_MODEL_SHA256: &str = MODEL_BASE_EN.sha256;
+
+/// Look up a `ModelSpec` by its `file` name or size. Returns `None` for unknown
+/// models. Hosts can also construct their own `ModelSpec` directly.
+pub fn model_spec_for_file(file: &str) -> Option<ModelSpec> {
+    [MODEL_BASE_EN, MODEL_SMALL]
+        .into_iter()
+        .find(|spec| spec.file == file)
+}
 
 /// Sample rate expected by the Whisper model (16 kHz mono). Hosts that feed
 /// their own audio (e.g. uploaded files) must resample to this rate first -
@@ -69,6 +113,7 @@ pub struct Dictation {
     model_path: PathBuf,
     verified_marker_path: PathBuf,
     ready_marker_path: PathBuf,
+    spec: ModelSpec,
     commands: Sender<Command>,
     recording: Arc<Mutex<bool>>,
     // Live handle onto the in-flight recording's sample buffer (set by the capture worker
@@ -91,6 +136,15 @@ struct RecordedAudio {
 
 impl Dictation {
     pub fn new(model_dir: impl Into<PathBuf>) -> Self {
+        Self::with_spec(model_dir, MODEL_BASE_EN)
+    }
+
+    /// Create a dictation session using an explicit model spec (language/quality).
+    ///
+    /// `model_dir` is the directory the model file is stored in; the chosen
+    /// model's `file` name is joined onto it. Enables non-English dictation,
+    /// e.g. [`MODEL_SMALL`] for German.
+    pub fn with_spec(model_dir: impl Into<PathBuf>, spec: ModelSpec) -> Self {
         // CPAL's CoreAudio stream is intentionally !Send. Keep it on one dedicated owner thread
         // rather than unsafely forcing it through Tauri's Send + Sync application state.
         let (commands, receiver) = mpsc::channel();
@@ -99,11 +153,12 @@ impl Dictation {
         let worker_recording = recording.clone();
         let worker_live = live.clone();
         thread::spawn(move || capture_worker(receiver, worker_recording, worker_live));
-        let model_path = model_dir.into().join(DEFAULT_MODEL_FILE);
+        let model_path = model_dir.into().join(spec.file);
         Self {
             verified_marker_path: model_path.with_extension("bin.verified"),
             ready_marker_path: model_path.with_extension("bin.ready"),
             model_path,
+            spec,
             commands,
             recording,
             live,
@@ -115,15 +170,15 @@ impl Dictation {
     pub fn status(&self) -> DictationStatus {
         let model_installed = self.model_path.is_file();
         let model_verified = model_installed
-            && model_verification_marker_matches(&self.model_path, &self.verified_marker_path);
+            && model_verification_marker_matches(&self.model_path, &self.verified_marker_path, self.spec);
         DictationStatus {
             recording: self.recording.lock().map(|r| *r).unwrap_or(false),
             model_installed,
             model_verified,
             test_passed: model_verified && self.ready_marker_path.is_file(),
             download_in_progress: self.download_in_progress.load(Ordering::SeqCst),
-            model_name: "Whisper Base English (local)",
-            model_bytes: DEFAULT_MODEL_BYTES,
+            model_name: self.spec.label,
+            model_bytes: self.spec.bytes,
         }
     }
 
@@ -164,15 +219,17 @@ impl Dictation {
                 .map_err(|e| format!("Could not create model directory: {e}"))?;
 
             let partial = self.model_path.with_extension("bin.part");
-            // Per-read timeout, not overall: a 142 MB transfer legitimately takes minutes, but
-            // a stalled connection must surface as an error — the cancel flag is only observed
-            // between reads, so an indefinitely blocked read would also make Cancel unresponsive.
+            // Per-read timeout, not overall: a multi-hundred-MB transfer legitimately takes
+            // minutes, but a stalled connection must surface as an error — the cancel flag is
+            // only observed between reads, so an indefinitely blocked read would also make
+            // Cancel unresponsive.
             let agent = ureq::AgentBuilder::new()
                 .timeout_connect(std::time::Duration::from_secs(30))
                 .timeout_read(std::time::Duration::from_secs(30))
                 .build();
+            let (spec_url, spec_bytes) = (self.spec.url, self.spec.bytes);
             let response = agent
-                .get(DEFAULT_MODEL_URL)
+                .get(spec_url)
                 .call()
                 .map_err(|e| format!("Could not download the local voice model: {e}"))?;
             let mut input = response.into_reader();
@@ -183,7 +240,7 @@ impl Dictation {
             let mut buffer = [0_u8; 64 * 1024];
             on_progress(DownloadProgress {
                 downloaded_bytes: 0,
-                total_bytes: DEFAULT_MODEL_BYTES,
+                total_bytes: spec_bytes,
             });
             loop {
                 if self.cancel_download.load(Ordering::SeqCst) {
@@ -202,12 +259,12 @@ impl Dictation {
                     .map_err(|e| format!("Could not save the local voice model: {e}"))?;
                 downloaded += count as u64;
                 if downloaded.saturating_sub(last_reported) >= 512 * 1024
-                    || downloaded == DEFAULT_MODEL_BYTES
+                    || downloaded == spec_bytes
                 {
                     last_reported = downloaded;
                     on_progress(DownloadProgress {
                         downloaded_bytes: downloaded,
-                        total_bytes: DEFAULT_MODEL_BYTES,
+                        total_bytes: spec_bytes,
                     });
                 }
             }
@@ -216,18 +273,18 @@ impl Dictation {
                 .map_err(|e| format!("Could not finish saving the local voice model: {e}"))?;
             drop(output);
 
-            verify_model_file(&partial)?;
+            verify_model_file(&partial, self.spec)?;
             if self.model_path.exists() {
                 fs::remove_file(&self.model_path)
                     .map_err(|e| format!("Could not replace the local voice model: {e}"))?;
             }
             fs::rename(&partial, &self.model_path)
                 .map_err(|e| format!("Could not install the local voice model: {e}"))?;
-            write_verification_marker(&self.model_path, &self.verified_marker_path)?;
+            write_verification_marker(&self.model_path, &self.verified_marker_path, self.spec)?;
             let _ = fs::remove_file(&self.ready_marker_path);
             on_progress(DownloadProgress {
-                downloaded_bytes: DEFAULT_MODEL_BYTES,
-                total_bytes: DEFAULT_MODEL_BYTES,
+                downloaded_bytes: spec_bytes,
+                total_bytes: spec_bytes,
             });
             Ok(())
         })();
@@ -239,8 +296,8 @@ impl Dictation {
 
     /// Verifies an already-installed model (including installs made by older app versions).
     pub fn verify_default_model(&self) -> Result<(), String> {
-        verify_model_file(&self.model_path)?;
-        write_verification_marker(&self.model_path, &self.verified_marker_path)
+        verify_model_file(&self.model_path, self.spec)?;
+        write_verification_marker(&self.model_path, &self.verified_marker_path, self.spec)
     }
 
     pub fn cancel_model_download(&self) {
@@ -338,14 +395,14 @@ impl Dictation {
     }
 }
 
-fn verify_model_file(path: &Path) -> Result<(), String> {
+fn verify_model_file(path: &Path, spec: ModelSpec) -> Result<(), String> {
     let metadata =
         fs::metadata(path).map_err(|e| format!("Could not read the local voice model: {e}"))?;
-    if metadata.len() != DEFAULT_MODEL_BYTES {
+    if metadata.len() != spec.bytes {
         return Err(format!(
             "The local voice model is incomplete ({} of {} bytes).",
             metadata.len(),
-            DEFAULT_MODEL_BYTES
+            spec.bytes
         ));
     }
     let mut file =
@@ -362,7 +419,7 @@ fn verify_model_file(path: &Path) -> Result<(), String> {
         hasher.update(&buffer[..count]);
     }
     let actual = format!("{:x}", hasher.finalize());
-    if actual != DEFAULT_MODEL_SHA256 {
+    if actual != spec.sha256 {
         return Err(
             "The local voice model failed its checksum. Repair the download in Settings."
                 .to_owned(),
@@ -381,25 +438,29 @@ fn model_modified_millis(path: &Path) -> Option<u128> {
         .map(|duration| duration.as_millis())
 }
 
-fn write_verification_marker(model_path: &Path, marker_path: &Path) -> Result<(), String> {
+fn write_verification_marker(
+    model_path: &Path,
+    marker_path: &Path,
+    spec: ModelSpec,
+) -> Result<(), String> {
     let modified = model_modified_millis(model_path)
         .ok_or_else(|| "Could not read the installed voice model timestamp.".to_owned())?;
-    fs::write(marker_path, format!("{DEFAULT_MODEL_SHA256}\n{modified}\n"))
+    fs::write(marker_path, format!("{}\n{modified}\n", spec.sha256))
         .map_err(|e| format!("Could not record voice model verification: {e}"))
 }
 
-fn model_verification_marker_matches(model_path: &Path, marker_path: &Path) -> bool {
+fn model_verification_marker_matches(model_path: &Path, marker_path: &Path, spec: ModelSpec) -> bool {
     let Ok(metadata) = fs::metadata(model_path) else {
         return false;
     };
-    if metadata.len() != DEFAULT_MODEL_BYTES {
+    if metadata.len() != spec.bytes {
         return false;
     }
     let Ok(marker) = fs::read_to_string(marker_path) else {
         return false;
     };
     let mut lines = marker.lines();
-    let hash_matches = lines.next() == Some(DEFAULT_MODEL_SHA256);
+    let hash_matches = lines.next() == Some(spec.sha256);
     let marker_modified = lines.next().and_then(|value| value.parse::<u128>().ok());
     hash_matches && marker_modified == model_modified_millis(model_path)
 }
@@ -629,7 +690,7 @@ mod tests {
 
     use super::{
         resample_mono, write_verification_marker, Dictation, DEFAULT_MODEL_BYTES,
-        DEFAULT_MODEL_FILE,
+        DEFAULT_MODEL_FILE, MODEL_BASE_EN,
     };
 
     #[test]
@@ -664,7 +725,7 @@ mod tests {
             .unwrap();
         let dictation = Dictation::new(&dir);
         assert!(!dictation.status().model_verified);
-        write_verification_marker(&model, &dictation.verified_marker_path).unwrap();
+        write_verification_marker(&model, &dictation.verified_marker_path, MODEL_BASE_EN).unwrap();
         assert!(dictation.status().model_verified);
         assert!(!dictation.status().test_passed);
         dictation.mark_test_passed().unwrap();
